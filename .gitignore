@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+waitlist_*.csv
+waitlist_*.json
+unique_questions.json
+dist/
+build/
+*.spec
+uploads/

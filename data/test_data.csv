@@ -1,0 +1,3 @@
+id,first_name,last_name,email,ticket_class_name,status,created
+1,John,Doe,johndoe@example.com,General,Attending,2026-04-13
+2,Jane,Smith,janesmith@example.com,General,Attending,2026-04-13

@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Form Filler - CSRD ASU</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <img src="{{ url_for('static', filename='csrd_logo.png') }}" alt="CSRD Logo" class="logo">
+            <h1>📋 Form Filler</h1>
+            <p class="subtitle">Automated form submission for csrd.asu.edu</p>
+        </header>
+
+        <div class="upload-section">
+            <div class="upload-box" id="uploadBox">
+                <div class="upload-icon">📤</div>
+                <h2>Upload Your File</h2>
+                <p>Drag and drop your CSV or Excel file here</p>
+                <p class="file-info">or click to browse</p>
+                <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" hidden>
+                <button class="browse-btn" onclick="document.getElementById('fileInput').click()">
+                    Choose File
+                </button>
+            </div>
+
+            <div class="filename-display" id="filenameDisplay" style="display: none;">
+                <span id="filename"></span>
+                <button class="change-file-btn" onclick="resetUpload()">Change File</button>
+            </div>
+
+            <div class="workers-setting">
+                <label for="workersInput">
+                    <span class="workers-label">⚡ Parallel Workers:</span>
+                    <span class="workers-value" id="workersValue">10</span>
+                </label>
+                <input type="range" id="workersInput" min="1" max="20" value="10">
+                <p class="workers-info">Higher values = faster processing (recommended: 8-10)</p>
+            </div>
+
+            <button class="submit-btn" id="submitBtn" disabled onclick="uploadFile()">
+                Start Processing
+            </button>
+        </div>
+
+        <div class="progress-section" id="progressSection" style="display: none;">
+            <h2>Processing...</h2>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progressFill"></div>
+            </div>
+            <p class="progress-text" id="progressText">0 / 0</p>
+
+            <div class="log-container" id="logContainer">
+                <!-- Progress messages will appear here -->
+            </div>
+        </div>
+
+        <div class="results-section" id="resultsSection" style="display: none;">
+            <h2>✅ Complete!</h2>
+            <div class="results-stats">
+                <div class="stat-box success">
+                    <div class="stat-number" id="successCount">0</div>
+                    <div class="stat-label">Successful</div>
+                </div>
+                <div class="stat-box failed">
+                    <div class="stat-number" id="failedCount">0</div>
+                    <div class="stat-label">Failed</div>
+                </div>
+                <div class="stat-box total">
+                    <div class="stat-number" id="totalCount">0</div>
+                    <div class="stat-label">Total</div>
+                </div>
+            </div>
+            <button class="reset-btn" onclick="location.reload()">Process Another File</button>
+        </div>
+    </div>
+
+    <script>
+        const uploadBox = document.getElementById('uploadBox');
+        const fileInput = document.getElementById('fileInput');
+        const submitBtn = document.getElementById('submitBtn');
+        const filenameDisplay = document.getElementById('filenameDisplay');
+        const filename = document.getElementById('filename');
+        const workersInput = document.getElementById('workersInput');
+        const workersValue = document.getElementById('workersValue');
+        const progressSection = document.getElementById('progressSection');
+        const resultsSection = document.getElementById('resultsSection');
+        const logContainer = document.getElementById('logContainer');
+        const progressFill = document.getElementById('progressFill');
+        const progressText = document.getElementById('progressText');
+
+        let selectedFile = null;
+
+        // Update workers value display
+        workersInput.addEventListener('input', (e) => {
+            workersValue.textContent = e.target.value;
+        });
+
+        // Drag and drop
+        uploadBox.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadBox.classList.add('drag-over');
+        });
+
+        uploadBox.addEventListener('dragleave', () => {
+            uploadBox.classList.remove('drag-over');
+        });
+
+        uploadBox.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadBox.classList.remove('drag-over');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFileSelect(files[0]);
+            }
+        });
+
+        // File input change
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+
+        // Click to upload
+        uploadBox.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        function handleFileSelect(file) {
+            const validExtensions = ['csv', 'xlsx', 'xls'];
+            const fileExtension = file.name.split('.').pop().toLowerCase();
+
+            if (!validExtensions.includes(fileExtension)) {
+                alert('Please upload a CSV or Excel file (.csv, .xlsx, .xls)');
+                return;
+            }
+
+            selectedFile = file;
+            filename.textContent = file.name;
+            filenameDisplay.style.display = 'block';
+            submitBtn.disabled = false;
+        }
+
+        function resetUpload() {
+            selectedFile = null;
+            fileInput.value = '';
+            filenameDisplay.style.display = 'none';
+            submitBtn.disabled = true;
+        }
+
+        function uploadFile() {
+            if (!selectedFile) return;
+
+            const formData = new FormData();
+            formData.append('file', selectedFile);
+            formData.append('workers', workersInput.value);
+
+            // Hide upload section, show progress
+            document.querySelector('.upload-section').style.display = 'none';
+            progressSection.style.display = 'block';
+
+            // Upload file
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // Connect to progress stream
+                        const eventSource = new EventSource('/progress');
+
+                        eventSource.onmessage = (event) => {
+                            const update = JSON.parse(event.data);
+                            handleProgressUpdate(update);
+                        };
+
+                        eventSource.onerror = () => {
+                            eventSource.close();
+                        };
+                    } else {
+                        alert('Error: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    alert('Upload failed: ' + error);
+                });
+        }
+
+        function handleProgressUpdate(update) {
+            if (update.type === 'complete') {
+                // Show results
+                progressSection.style.display = 'none';
+                resultsSection.style.display = 'block';
+                document.getElementById('successCount').textContent = update.success;
+                document.getElementById('failedCount').textContent = update.failed;
+                document.getElementById('totalCount').textContent = update.total;
+            } else if (update.type === 'info') {
+                addLogMessage(update.message, 'info');
+                if (update.total) {
+                    // Update total count
+                }
+            } else if (update.type === 'success') {
+                addLogMessage(update.message, 'success');
+                updateProgress(update.completed, update.total);
+            } else if (update.type === 'error') {
+                addLogMessage(update.message, 'error');
+                updateProgress(update.completed, update.total);
+            }
+        }
+
+        function addLogMessage(message, type) {
+            const logEntry = document.createElement('div');
+            logEntry.className = `log-entry ${type}`;
+            logEntry.textContent = message;
+            logContainer.appendChild(logEntry);
+            logContainer.scrollTop = logContainer.scrollHeight;
+        }
+
+        function updateProgress(completed, total) {
+            const percentage = (completed / total) * 100;
+            progressFill.style.width = percentage + '%';
+            progressText.textContent = `${completed} / ${total}`;
+        }
+    </script>
+</body>
+
+</html>
