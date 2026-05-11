@@ -2,8 +2,8 @@ import requests
 import sys
 import json
 import csv
+import os
 
-API_KEY = "MR3UNKWKITN3C3BNZG4S"
 BASE_URL = "https://www.eventbriteapi.com/v3"
 
 def get_attendees(event_id):
@@ -11,8 +11,13 @@ def get_attendees(event_id):
     has_more_items = True
     continuation = None
 
+    api_key = os.environ.get("EVENTBRITE_API_KEY")
+    if not api_key:
+        print("Error: EVENTBRITE_API_KEY environment variable is not set.", file=sys.stderr)
+        return None
+
     headers = {
-        "Authorization": f"Bearer {API_KEY}"
+        "Authorization": f"Bearer {api_key}"
     }
 
     print(f"Fetching attendees for event {event_id}...")
@@ -57,8 +62,9 @@ def filter_waitlist_attendees(attendees):
             q_text = answer.get('question', '').lower()
             a_text = answer.get('answer', '').lower()
             
-            # Look for questions related to waitlist or email distro list
-            if ('waitlist' in q_text or 'email list' in q_text or 'distro' in q_text):
+            # Look for questions related to waitlist, email distro list, or newsletter
+            keywords = ['waitlist', 'email list', 'distro', 'newsletter', 'subscribe', 'mailing list', 'updates']
+            if any(kw in q_text for kw in keywords):
                 # Check for an affirmative answer
                 if a_text in ['yes', 'y', 'true', '1'] or 'yes' in a_text.split() or 'yes,' in a_text:
                     is_waitlist = True

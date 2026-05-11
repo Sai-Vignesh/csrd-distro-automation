@@ -10,9 +10,17 @@ from src.automation.form_submitter import process_file as async_process_file
 from src.automation.form_submitter import FormEntry
 import pandas as pd
 from playwright.async_api import async_playwright
+from src.eventbrite.fetcher import get_attendees, filter_waitlist_attendees
+from dotenv import load_dotenv
 
-app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'uploads'
+# Load environment variables from .env file
+load_dotenv()
+
+base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+app = Flask(__name__, 
+            template_folder=os.path.join(base_dir, 'templates'),
+            static_folder=os.path.join(base_dir, 'static'))
+app.config['UPLOAD_FOLDER'] = os.path.join(base_dir, 'uploads')
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
 
 # Create uploads folder if it doesn't exist
@@ -190,6 +198,101 @@ async def process_file_with_progress(file_path: str, workers: int = 10):
         'total': current_status['total']
     })
 
+async def process_event_with_progress(event_id: str, workers: int = 10):
+    """Process attendees fetched via Eventbrite Event ID with progress updates."""
+    global current_status
+    
+    # Reset status
+    current_status = {
+        'processing': True,
+        'total': 0,
+        'completed': 0,
+        'success': 0,
+        'failed': 0,
+        'current_message': 'Fetching Eventbrite attendees...'
+    }
+    
+    progress_queue.put({'type': 'info', 'message': f'Fetching attendees for Event ID: {event_id}...'})
+    
+    # Fetch attendees
+    attendees = get_attendees(event_id)
+    if attendees is None:
+        progress_queue.put({'type': 'error', 'message': 'Failed to fetch attendees or API key is not configured.'})
+        current_status['processing'] = False
+        return
+
+    progress_queue.put({'type': 'info', 'message': f'Total attendees fetched: {len(attendees)}. Filtering for waitlist/newsletter...'})
+    
+    waitlist_attendees = filter_waitlist_attendees(attendees)
+    
+    current_status['total'] = len(waitlist_attendees)
+    progress_queue.put({
+        'type': 'info',
+        'message': f'Found {len(waitlist_attendees)} attendees who opted in.',
+        'total': len(waitlist_attendees)
+    })
+    
+    if len(waitlist_attendees) == 0:
+        progress_queue.put({'type': 'error', 'message': 'No attendees found who opted in.'})
+        current_status['processing'] = False
+        return
+        
+    # Create queue and results
+    task_queue = asyncio.Queue()
+    results = {'success': [], 'failed': []}
+    
+    # Populate queue
+    for idx, att in enumerate(waitlist_attendees):
+        profile = att.get('profile', {})
+        first_name = profile.get('first_name', '')
+        last_name = profile.get('last_name', '')
+        
+        # Fallback if first_name/last_name are missing
+        if not first_name and not last_name and profile.get('name'):
+            parts = profile.get('name').split(' ', 1)
+            first_name = parts[0]
+            last_name = parts[1] if len(parts) > 1 else ''
+
+        email = profile.get('email', '')
+        
+        # Skip 'INFO REQUESTED' dummy names if present
+        if 'INFO REQUESTED' in first_name.upper() or 'INFO REQUESTED' in last_name.upper() or 'INFO REQUESTED' in email.upper():
+            current_status['total'] -= 1
+            continue
+
+        entry = FormEntry(
+            first_name=str(first_name).strip(),
+            last_name=str(last_name).strip(),
+            email=str(email).strip(),
+            row_index=idx
+        )
+        await task_queue.put(entry)
+    
+    # Add poison pills
+    for _ in range(workers):
+        await task_queue.put(None)
+    
+    progress_queue.put({'type': 'info', 'message': f'Starting {workers} workers...'})
+    
+    # Create workers
+    worker_tasks = [
+        asyncio.create_task(fill_form_worker_with_progress(i, task_queue, results, headless=True))
+        for i in range(workers)
+    ]
+    
+    # Wait for completion
+    await asyncio.gather(*worker_tasks)
+    
+    # Final status
+    current_status['processing'] = False
+    progress_queue.put({
+        'type': 'complete',
+        'message': f'Completed! {current_status["success"]} successful, {current_status["failed"]} failed',
+        'success': current_status['success'],
+        'failed': current_status['failed'],
+        'total': current_status['total']
+    })
+
 
 def run_async_process(file_path: str, workers: int):
     """Run async process in a new event loop."""
@@ -197,6 +300,15 @@ def run_async_process(file_path: str, workers: int):
     asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(process_file_with_progress(file_path, workers))
+    finally:
+        loop.close()
+
+def run_async_event_process(event_id: str, workers: int):
+    """Run async event process in a new event loop."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(process_event_with_progress(event_id, workers))
     finally:
         loop.close()
 
@@ -230,6 +342,21 @@ def upload_file():
         thread.start()
         
         return jsonify({'success': True, 'message': 'Processing started'})
+
+@app.route('/process_event', methods=['POST'])
+def process_event():
+    """Handle processing by Event ID."""
+    event_id = request.form.get('event_id')
+    if not event_id:
+        return jsonify({'error': 'No Event ID provided'}), 400
+    
+    workers = int(request.form.get('workers', 10))
+    
+    # Start processing in background thread
+    thread = threading.Thread(target=run_async_event_process, args=(event_id, workers))
+    thread.start()
+    
+    return jsonify({'success': True, 'message': 'Processing started for event'})
 
 
 @app.route('/progress')

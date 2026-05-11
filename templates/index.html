@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Form Filler - CSRD ASU</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 
@@ -16,23 +17,49 @@
             <p class="subtitle">Automated form submission for csrd.asu.edu</p>
         </header>
 
-        <div class="upload-section">
-            <div class="upload-box" id="uploadBox">
-                <div class="upload-icon">📤</div>
-                <h2>Upload Your File</h2>
-                <p>Drag and drop your CSV or Excel file here</p>
-                <p class="file-info">or click to browse</p>
-                <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" hidden>
-                <button class="browse-btn" onclick="document.getElementById('fileInput').click()">
-                    Choose File
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('event')" id="tabEvent">Fetch by Event ID</button>
+            <button class="tab-btn" onclick="switchTab('upload')" id="tabUpload">Upload File</button>
+        </div>
+
+        <div class="action-section" id="mainSection">
+            <!-- Event ID Section -->
+            <div id="eventSection" class="tab-content active">
+                <div class="event-box">
+                    <div class="upload-icon">🎫</div>
+                    <h2>Eventbrite ID</h2>
+                    <p>Enter the Event ID to fetch waitlisted attendees</p>
+                    <input type="text" id="eventIdInput" class="event-input" placeholder="e.g. 1981809482511" oninput="checkEventInput()">
+                </div>
+                <button class="submit-btn" id="eventSubmitBtn" disabled onclick="processEvent()">
+                    Start Processing Event
                 </button>
             </div>
 
-            <div class="filename-display" id="filenameDisplay" style="display: none;">
-                <span id="filename"></span>
-                <button class="change-file-btn" onclick="resetUpload()">Change File</button>
+            <!-- Upload Section -->
+            <div id="uploadSection" class="tab-content" style="display: none;">
+                <div class="upload-box" id="uploadBox">
+                    <div class="upload-icon">📤</div>
+                    <h2>Upload Your File</h2>
+                    <p>Drag and drop your CSV or Excel file here</p>
+                    <p class="file-info">or click to browse</p>
+                    <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" hidden>
+                    <button class="browse-btn" onclick="document.getElementById('fileInput').click()">
+                        Choose File
+                    </button>
+                </div>
+
+                <div class="filename-display" id="filenameDisplay" style="display: none;">
+                    <span id="filename"></span>
+                    <button class="change-file-btn" onclick="resetUpload()">Change File</button>
+                </div>
+                
+                <button class="submit-btn" id="uploadSubmitBtn" disabled onclick="uploadFile()">
+                    Start Processing File
+                </button>
             </div>
 
+            <!-- Shared Workers Setting -->
             <div class="workers-setting">
                 <label for="workersInput">
                     <span class="workers-label">⚡ Parallel Workers:</span>
@@ -41,10 +68,6 @@
                 <input type="range" id="workersInput" min="1" max="20" value="10">
                 <p class="workers-info">Higher values = faster processing (recommended: 8-10)</p>
             </div>
-
-            <button class="submit-btn" id="submitBtn" disabled onclick="uploadFile()">
-                Start Processing
-            </button>
         </div>
 
         <div class="progress-section" id="progressSection" style="display: none;">
@@ -82,7 +105,9 @@
     <script>
         const uploadBox = document.getElementById('uploadBox');
         const fileInput = document.getElementById('fileInput');
-        const submitBtn = document.getElementById('submitBtn');
+        const uploadSubmitBtn = document.getElementById('uploadSubmitBtn');
+        const eventSubmitBtn = document.getElementById('eventSubmitBtn');
+        const eventIdInput = document.getElementById('eventIdInput');
         const filenameDisplay = document.getElementById('filenameDisplay');
         const filename = document.getElementById('filename');
         const workersInput = document.getElementById('workersInput');
@@ -92,8 +117,31 @@
         const logContainer = document.getElementById('logContainer');
         const progressFill = document.getElementById('progressFill');
         const progressText = document.getElementById('progressText');
+        const mainSection = document.getElementById('mainSection');
+        const eventSection = document.getElementById('eventSection');
+        const uploadSection = document.getElementById('uploadSection');
+        const tabEvent = document.getElementById('tabEvent');
+        const tabUpload = document.getElementById('tabUpload');
 
         let selectedFile = null;
+
+        function switchTab(tab) {
+            if (tab === 'event') {
+                eventSection.style.display = 'block';
+                uploadSection.style.display = 'none';
+                tabEvent.classList.add('active');
+                tabUpload.classList.remove('active');
+            } else {
+                eventSection.style.display = 'none';
+                uploadSection.style.display = 'block';
+                tabEvent.classList.remove('active');
+                tabUpload.classList.add('active');
+            }
+        }
+
+        function checkEventInput() {
+            eventSubmitBtn.disabled = eventIdInput.value.trim().length === 0;
+        }
 
         // Update workers value display
         workersInput.addEventListener('input', (e) => {
@@ -143,14 +191,14 @@
             selectedFile = file;
             filename.textContent = file.name;
             filenameDisplay.style.display = 'block';
-            submitBtn.disabled = false;
+            uploadSubmitBtn.disabled = false;
         }
 
         function resetUpload() {
             selectedFile = null;
             fileInput.value = '';
             filenameDisplay.style.display = 'none';
-            submitBtn.disabled = true;
+            uploadSubmitBtn.disabled = true;
         }
 
         function uploadFile() {
@@ -161,7 +209,8 @@
             formData.append('workers', workersInput.value);
 
             // Hide upload section, show progress
-            document.querySelector('.upload-section').style.display = 'none';
+            document.querySelector('.action-section').style.display = 'none';
+            document.querySelector('.tabs').style.display = 'none';
             progressSection.style.display = 'block';
 
             // Upload file
@@ -189,6 +238,47 @@
                 })
                 .catch(error => {
                     alert('Upload failed: ' + error);
+                });
+        }
+
+        function processEvent() {
+            const eventId = eventIdInput.value.trim();
+            if (!eventId) return;
+
+            const formData = new FormData();
+            formData.append('event_id', eventId);
+            formData.append('workers', workersInput.value);
+
+            // Hide main section, show progress
+            document.querySelector('.action-section').style.display = 'none';
+            document.querySelector('.tabs').style.display = 'none';
+            progressSection.style.display = 'block';
+
+            // Start processing
+            fetch('/process_event', {
+                method: 'POST',
+                body: formData
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.success) {
+                        // Connect to progress stream
+                        const eventSource = new EventSource('/progress');
+
+                        eventSource.onmessage = (event) => {
+                            const update = JSON.parse(event.data);
+                            handleProgressUpdate(update);
+                        };
+
+                        eventSource.onerror = () => {
+                            eventSource.close();
+                        };
+                    } else {
+                        alert('Error: ' + data.error);
+                    }
+                })
+                .catch(error => {
+                    alert('Request failed: ' + error);
                 });
         }
 
